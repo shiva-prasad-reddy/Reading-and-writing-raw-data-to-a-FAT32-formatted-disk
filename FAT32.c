@@ -133,18 +133,17 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 	struct DIRECTORY_ENTRY *head, *temp, *last;
 	head = temp = last = NULL;
 
+
+	//readingPoint is used to skip these records in a directory
+	// . --> points to the same directory
+	// .. --> points to the parent directory
 	for(int i = readingPoint; i < DirEntriesInACluster; i++)
 	{
-		if(buffer[32 * i] == 0x0)
-		{
-			//printf("End Of Records\n");
-			break;
-		}
-		if(buffer[32 * i] == 0xE5)
-		{
-			//printf("Unused Record caused By Deletion\n");
-			continue;
-		}
+		//End Of Records
+		if(buffer[32 * i] == 0x0) break;
+
+		//printf("Unused Record caused By Deletion
+		if(buffer[32 * i] == 0xE5) continue;
 
 		int attr = turn_to_integer(buffer + (32 * i), 11, 1);
 		int X;
@@ -152,13 +151,13 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 		//LONG FILE NAME ENTRY
 		if(attr == 0xF)
 		{
-			//Read to get the file name
+			//Code to get the long file name
 			//Read 2 Bytes at a time to get the character
 			//1 -- 10
 			for(int j = 1; j < 10; j += 2)
 			{
 				X = turn_to_integer(buffer + (32 * i), j, 2);
-				if(X == 0xffff) break;
+				if(X == 0xffff) break; //end of file name
 				TEMP[++temp_stack] = X;
 			}
 
@@ -166,7 +165,7 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 			for(int j = 14; j < 25; j += 2)
 			{
 				X = turn_to_integer(buffer + (32 * i), j, 2);
-				if(X == 0xffff) break;
+				if(X == 0xffff) break; //end of file name
 				TEMP[++temp_stack] = X;
 			}
 
@@ -174,43 +173,28 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 			for(int j = 28; j < 31; j += 2)
 			{
 				X = turn_to_integer(buffer + (32 * i), j, 2);
-				if(X == 0xffff) break;
+				if(X == 0xffff) break; //end of file name
 				TEMP[++temp_stack] = X;
 			}
 
 			//POP AND PUSH INTO LONG NAME STACK
 			while(temp_stack != -1) LONG_NAME[++long_name_stack] = TEMP[temp_stack--];
 
-			continue;
+			continue; //Because a Long file name entry detected so skip
 		}
-
-		
-
-	
-		
-		//printf("ATTR == %x\n", attr);
+		//Only files and directories are considered
+		//and other system related files are ignored
+		//based on Attr
 		if(attr == 0x10 || attr == 0x20)
 		{
-			//printf("Normal Record Detected\n");
 			temp = malloc(sizeof(struct DIRECTORY_ENTRY));
-			temp->next = NULL;
-			temp->dir = NULL;
-			if(head == NULL) 
-			{
-				head = temp;
-				last = temp;
-			}
-			else 
-			{
-				last->next = temp;
-				last = temp;
-			}
-
+			temp->next = temp->dir = NULL;
+			if(head == NULL) head = temp;
+			else last->next = temp;
+			last  = temp;
 			int count = 0;
 			for(int j = 0; j < 11; j++) temp->Name[count++] = buffer[ (32*i)+j ];
-
-			//above or below
-	
+			//finds file name from above or below code
 			if(long_name_stack != -1)
 			{
 				count = 0;
@@ -222,15 +206,12 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 			}
 			temp->Name[count] = '\0';			
 
-
 			temp->FileSize = turn_to_integer(buffer + (32 * i), 28, 4); //In Bytes
 			temp->StartCluster = (turn_to_integer(buffer + (32 * i), 20, 2) * pow(2, 16)) + turn_to_integer(buffer + (32 * i), 26, 2);
 			temp->Attr = attr;
 
-			//printf("%.20s\t%.10ld\t%.10d\t%.10s\n", temp->Name, temp->FileSize, temp->StartCluster, temp->Type);
-			if(attr == 0x10 /*&& temp->StartCluster != clusterNumber && temp->StartCluster != 0*/)
+			if(attr == 0x10)
 			{
-				//printf("DIRECTORY DETECTED.\n");
 				temp->dir = readDirecory(2, temp->StartCluster, disk, bpb);
 			}
 		}
@@ -241,9 +222,10 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 	return head;
 }
 
+//To display sectors allocated to a file or directory 
+//but used to count the total sectors allocated
 int displaySectorsAllocated(unsigned int *FAT, int start)
 {
-	//Sector numbers can also be displayed
 	int i = 1;
 	//printf("%d, ", start);
 	while(FAT[start] != 268435455)
@@ -259,19 +241,15 @@ void displayDIREntries(char *tab, struct DIRECTORY_ENTRY *temp, unsigned int *FA
 {
 	while(temp != NULL)
 	{
-		char tab2[100];
-		//printf("%p\n", temp);
-		//printf("%c\n", tab);
-		//printf("\n");
 		printf("%sFileName = %s\n", tab, temp->Name);
 		printf("%sFileSize = %ld Bytes\n", tab, temp->FileSize);
 		printf("%sStartCluster = %d\n", tab, temp->StartCluster);
 		printf("%sFileAttr = %x %s\n", tab, temp->Attr, (temp->Attr == 0x10 ? "(DIR)" : "(FILE)"));
 		if(temp->StartCluster != 0) printf("%sTotalSectors = %d\n", tab, displaySectorsAllocated(FAT, temp->StartCluster));
-		//printf("%c\n", tab);
 
 		if(temp->dir != NULL)
 		{
+			char tab2[100];
 			strcpy(tab2, tab);
 			strcat(tab2, "\t");
 			printf("%s!\n", tab2);
@@ -283,7 +261,8 @@ void displayDIREntries(char *tab, struct DIRECTORY_ENTRY *temp, unsigned int *FA
 	}
 }
 
-int main() {
+int main()
+{
 
 	int disk = open("/dev/sdb1", O_RDONLY);
 
@@ -308,13 +287,10 @@ int main() {
 
 	struct DIRECTORY_ENTRY *DIR = readDirecory(0, bpb.RootClus, disk, &bpb);
 	printf("==========  FILE SYSTEM ===========\n\n");
-
 	char tab[100] = "";
-
 	displayDIREntries(tab, DIR, FAT);
 
-
-
+	//DIR LIST TO BE CLEARED
 	free(FAT);
 	close(disk);
 

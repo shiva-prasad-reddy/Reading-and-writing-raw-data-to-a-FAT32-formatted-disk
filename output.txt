@@ -1,0 +1,69 @@
+
++++  BIOS Parameter Block Info +++
+BytsPerSec = 512
+SecPerClus = 8
+RsvdSecCnt = 1698
+NumFATs = 2
+RootEntCnt 0
+TotSec32 = 15939943
+FATSz32 = 15535
+RootClus = 2
+++++++
+
+
+==========  FILE SYSTEM ===========
+
+FileName = Slides_week11.pdf
+FileSize = 646007 Bytes
+StartCluster = 1602
+FileAttr = 20 (FILE)
+TotalSectors = 158
+
+FileName = CHECK      
+FileSize = 0 Bytes
+StartCluster = 1760
+FileAttr = 10 (DIR)
+TotalSectors = 1
+	!
+	!
+	FileName = terminal.txt
+	FileSize = 19 Bytes
+	StartCluster = 1761
+	FileAttr = 20 (FILE)
+	TotalSectors = 1
+
+	FileName = one
+	FileSize = 0 Bytes
+	StartCluster = 1762
+	FileAttr = 10 (DIR)
+	TotalSectors = 1
+		!
+		!
+		FileName = one inside
+		FileSize = 0 Bytes
+		StartCluster = 1765
+		FileAttr = 10 (DIR)
+		TotalSectors = 1
+
+
+
+FileName = pichkari.mp3
+FileSize = 6532053 Bytes
+StartCluster = 6
+FileAttr = 20 (FILE)
+TotalSectors = 1595
+
+FileName = three
+FileSize = 0 Bytes
+StartCluster = 1763
+FileAttr = 10 (DIR)
+TotalSectors = 1
+	!
+	!
+	FileName = see.txt
+	FileSize = 3 Bytes
+	StartCluster = 1764
+	FileAttr = 20 (FILE)
+	TotalSectors = 1
+
+
