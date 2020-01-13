@@ -5,6 +5,15 @@
 #include<stdlib.h>
 #include<string.h>
 
+#define char unsigned char
+//#define int unsigned int //caused error in stacks used for long name(Bus Error)
+#define DIR_RECORD_SIZE 32 //32 Bytes
+#define FAT_RECORD_SIZE 4	//4 Bytes
+#define EOC 0x0fffffff //END OF CLUSTER CHAIN
+
+int disk;
+
+//BIOS Parameter Block
 struct BPB {
 	int BytsPerSec;
 	int SecPerClus;
@@ -14,56 +23,49 @@ struct BPB {
 	int TotSec32;
 	int FATSz32; //In Sectors
 	int RootClus;
+}*bpb;
+
+struct DIRECTORY {
+	char Name[256];
+	int Attr;
+	int StartCluster;
+	int FileSize; //In Bytes
+	struct DIRECTORY *next;
+	struct DIRECTORY *dir;
 };
 
-struct DIRECTORY_ENTRY {
-	unsigned char Name[256];
-	unsigned short int Attr;
-	unsigned int StartCluster;
-	long int FileSize; //In Bytes
-	struct DIRECTORY_ENTRY *next;
-	struct DIRECTORY_ENTRY *dir;
-};
-
-struct FSInfo {
-	unsigned int Free_Count;
-	unsigned int Nxt_Free;
-};
 
 //To display a part of the buffer
-void display_series_of_characters(char *buffer, int length)
+void print_text(char *buffer, int lenInBytes)
 {
-	for(int i = 0; i < length; i++)
-	{
-		printf("%c", buffer[i]);
-	}
+	for(int i = 0; i < lenInBytes; i++) printf("%c", buffer[i]);
 }
 
 //FAT32 stores in Little endian format
 //Convert a series of bits to an integer
-int turn_to_integer(char *buffer, int offset, int size)
+int little_endian_to_integer(char *buffer, int offset, int size)
 {
-	int p = 0;
-	int sum = 0;
-	unsigned char x;
+	int power, sum;
+	power = sum = 0;
+
+	char X;
 	for(int i = 0; i < size; i++)
 	{
-		x = buffer[i+offset];
+		X = buffer[i + offset];
 		for(int j = 0; j < 8; j++)
 		{
-			if( x & 1 )
-			{
-				sum = sum + (int)pow(2, p);
-			}
-			x = x >> 1;
-			p++;
+			if( X & 1 )
+				sum = sum + (int)pow(2, power);
+			
+			X = X >> 1;
+			power++;
 		}
 	}
 
 	return sum;
 }
 
-void display_bios_parameter_block_info(struct BPB *bpb)
+void print_BPB()
 {
 	printf("\n+++  BIOS Parameter Block Info +++\n");
 	printf("BytsPerSec = %d\n", bpb->BytsPerSec);
@@ -77,72 +79,88 @@ void display_bios_parameter_block_info(struct BPB *bpb)
 	printf("++++++\n\n\n");
 }
 
-void initializeBPB(int disk, struct BPB *bpb)
+void init_BPB()
 {
-	unsigned char buffer[512];
+	//First 512 Bytes contain the information of BPB
+	bpb = malloc(sizeof(struct BPB));
+	char buffer[512];
 	read(disk, buffer, 512);
-	bpb->BytsPerSec = turn_to_integer(buffer, 11, 2);
-	bpb->SecPerClus = turn_to_integer(buffer, 13, 1);
-	bpb->RsvdSecCnt = turn_to_integer(buffer, 14, 2);
-	bpb->NumFATs = turn_to_integer(buffer, 16, 1);
-	bpb->RootEntCnt = turn_to_integer(buffer, 17, 2);
-	bpb->TotSec32 = turn_to_integer(buffer, 32, 4);
-	bpb->FATSz32 = turn_to_integer(buffer, 36, 4); //In Sectors
-	bpb->RootClus = turn_to_integer(buffer, 44, 4);
-
-	display_bios_parameter_block_info(bpb);
+	bpb->BytsPerSec = little_endian_to_integer(buffer, 11, 2);
+	bpb->SecPerClus = little_endian_to_integer(buffer, 13, 1);
+	bpb->RsvdSecCnt = little_endian_to_integer(buffer, 14, 2);
+	bpb->NumFATs = little_endian_to_integer(buffer, 16, 1);
+	bpb->RootEntCnt = little_endian_to_integer(buffer, 17, 2);
+	bpb->TotSec32 = little_endian_to_integer(buffer, 32, 4);
+	bpb->FATSz32 = little_endian_to_integer(buffer, 36, 4); //In Sectors
+	bpb->RootClus = little_endian_to_integer(buffer, 44, 4);
 }
 
 
-void initializeFAT32(int disk, int *FAT, struct BPB *bpb)
+void init_FAT32(int *FAT)
 {
-	lseek(disk, bpb->RsvdSecCnt * bpb->BytsPerSec, SEEK_SET);
-	unsigned char *buffer = malloc((bpb->FATSz32 * bpb->BytsPerSec) * sizeof(unsigned char));
-	read(disk, buffer, bpb->FATSz32 * bpb->BytsPerSec);
-	int NumberOfFATEntries = (bpb->FATSz32 * bpb->BytsPerSec) / 4;
-	for(int i = 0; i < NumberOfFATEntries; i++)
-	{
-		FAT[i] = turn_to_integer(buffer, 4 * i, 4);
-	}
+	//There are 2 FAT tables
+	//FAT32 -- 32 bits (4 Bytes) but only 28 bits are used and high 4 bits are reserved
+	
+	int startByteOfFatTables = bpb->RsvdSecCnt * bpb->BytsPerSec;
+	int fatSizeInBytes = bpb->FATSz32 * bpb->BytsPerSec;
+	int numberOfFATEntries = fatSizeInBytes / FAT_RECORD_SIZE;
+
+	char *buffer = malloc(fatSizeInBytes * sizeof(char));
+
+	lseek(disk, startByteOfFatTables, SEEK_SET);
+	read(disk, buffer, fatSizeInBytes);
+	
+	for(int i = 0; i < numberOfFATEntries; i++) 
+		FAT[i] = little_endian_to_integer(buffer, 4 * i, 4);
+
 	free(buffer);
 }
 
-
-int getFirstSectorOfCluster(int N /*clusterNumber*/, struct BPB *bpb)
+void print_FAT32(int *FAT, int count)
 {
+	for(int i = 0; i < count; i++) 
+		printf("FatEntry[ %d ] = %d \n", i, FAT[i]);
+}
+
+
+
+int first_sector_of_cluster(int N /*clusterNumber*/)
+{
+	//Remeber N starts from value 2
+	//because the first 2 entries in the FAT table are not used
 	int FirstDataSector = bpb->RsvdSecCnt + (bpb->NumFATs * bpb->FATSz32);
-	//first two entries in the FAT are not used
 	return ((N - 2) * bpb->SecPerClus) + FirstDataSector;
 }
 
 //For normal directory . and .. are the first entries except root directory so skip those entries
-struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int disk, struct BPB *bpb)
+struct DIRECTORY* read_directory(int clusterNumber, int recordStartingPoint, int *FAT)
 {
 
 	//stacks to store long names
-	unsigned int TEMP[13], LONG_NAME[256];
+	int TEMP[13], LONG_NAME[256];
 	int temp_stack = -1, long_name_stack = -1;
 
-	int rootDirStartSector = getFirstSectorOfCluster(clusterNumber, bpb);
+	int sector = first_sector_of_cluster(clusterNumber);
+	int clusterSizeInBytes = bpb->SecPerClus * bpb->BytsPerSec;
 	//Root directory entries are of 32 Bytes
 	//and their number of entries are limited to the size of cluster
 	//and size is based on the FAT entries
+	//Say Directory Entries as records
+	int totalRecords = (bpb->SecPerClus * bpb->BytsPerSec) / DIR_RECORD_SIZE;
+	char *buffer = malloc(clusterSizeInBytes * sizeof(char));
 
-	int DirEntriesInACluster = (bpb->SecPerClus * bpb->BytsPerSec) / 32;
-	unsigned char *buffer = malloc((bpb->SecPerClus * bpb->BytsPerSec) * sizeof(unsigned char));
-
-	lseek(disk, rootDirStartSector * bpb->BytsPerSec, SEEK_SET);
-	read(disk, buffer, (bpb->SecPerClus * bpb->BytsPerSec));
+	lseek(disk, sector * bpb->BytsPerSec, SEEK_SET);
+	read(disk, buffer, clusterSizeInBytes);
 
 	//read each entry
-	struct DIRECTORY_ENTRY *head, *temp, *last;
+	struct DIRECTORY *head, *temp, *last;
 	head = temp = last = NULL;
 
 
 	//readingPoint is used to skip these records in a directory
 	// . --> points to the same directory
 	// .. --> points to the parent directory
-	for(int i = readingPoint; i < DirEntriesInACluster; i++)
+	for(int i = recordStartingPoint; i < totalRecords; i++)
 	{
 		//End Of Records
 		if(buffer[32 * i] == 0x0) break;
@@ -150,12 +168,8 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 		//Unused Record caused By Deletion
 		if(buffer[32 * i] == 0xE5) continue;
 
-		printf("%d  occupied\n", i);
-		int attr = turn_to_integer(buffer + (32 * i), 11, 1);
-		int X;
-		printf("CHECK THESE ==> ");
-		display_series_of_characters(buffer + (32 * i), 11);
-		printf("\n");
+		int attr = little_endian_to_integer(buffer + (32 * i), 11, 1);
+		int X; //temprary variable
 		//LONG FILE NAME ENTRY
 		if(attr == 0xF)
 		{
@@ -164,7 +178,7 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 			//1 -- 10
 			for(int j = 1; j < 10; j += 2)
 			{
-				X = turn_to_integer(buffer + (32 * i), j, 2);
+				X = little_endian_to_integer(buffer + (32 * i), j, 2);
 				if(X == 0xffff) break; //end of file name
 				TEMP[++temp_stack] = X;
 			}
@@ -172,7 +186,7 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 			//14 -- 25
 			for(int j = 14; j < 25; j += 2)
 			{
-				X = turn_to_integer(buffer + (32 * i), j, 2);
+				X = little_endian_to_integer(buffer + (32 * i), j, 2);
 				if(X == 0xffff) break; //end of file name
 				TEMP[++temp_stack] = X;
 			}
@@ -180,7 +194,7 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 			//28 -- 31
 			for(int j = 28; j < 31; j += 2)
 			{
-				X = turn_to_integer(buffer + (32 * i), j, 2);
+				X = little_endian_to_integer(buffer + (32 * i), j, 2);
 				if(X == 0xffff) break; //end of file name
 				TEMP[++temp_stack] = X;
 			}
@@ -195,104 +209,80 @@ struct DIRECTORY_ENTRY* readDirecory(int readingPoint, int clusterNumber, int di
 		//based on Attr
 		if(attr == 0x10 || attr == 0x20)
 		{
-			temp = malloc(sizeof(struct DIRECTORY_ENTRY));
+			temp = malloc(sizeof(struct DIRECTORY));
 			temp->next = temp->dir = NULL;
-			if(head == NULL) head = temp;
-			else last->next = temp;
-			last  = temp;
-			int count = 0;
-			for(int j = 0; j < 11; j++) temp->Name[count++] = buffer[ (32*i)+j ];
+
+			if(head == NULL) 
+				head = temp;
+			else 
+				last->next = temp;
+			
+			last = temp;
+
+			int count = 0; //used to count characters
+			for(int j = 0; j < 11; j++) 
+				temp->Name[count++] = buffer[ (32*i)+j ];
 			//finds file name from above or below code
 			if(long_name_stack != -1)
 			{
 				count = 0;
 				for(int j = long_name_stack; j > -1; j--)
-				{
 					temp->Name[count++] = (char)LONG_NAME[j];
-				}
+
 				temp_stack = long_name_stack = -1;
 			}
 			temp->Name[count] = '\0';			
 
-			temp->FileSize = turn_to_integer(buffer + (32 * i), 28, 4); //In Bytes
-			temp->StartCluster = (turn_to_integer(buffer + (32 * i), 20, 2) * pow(2, 16)) + turn_to_integer(buffer + (32 * i), 26, 2);
+			temp->FileSize = little_endian_to_integer(buffer + (32 * i), 28, 4); //In Bytes
+			temp->StartCluster = (little_endian_to_integer(buffer + (32 * i), 20, 2) * pow(2, 16)) + little_endian_to_integer(buffer + (32 * i), 26, 2);
 			temp->Attr = attr;
 
 			if(attr == 0x10)
-			{
-				temp->dir = readDirecory(2, temp->StartCluster, disk, bpb);
-			}
+				temp->dir = read_directory(temp->StartCluster, 2, FAT); //2 to skip . and .. dir entries
+			
+			if(FAT[clusterNumber] != EOC)
+				last->next = read_directory(FAT[clusterNumber], recordStartingPoint, FAT);
 		}
-		
 	}
 
 	free(buffer);
 	return head;
 }
 
-//To display sectors allocated to a file or directory 
-//but used to count the total sectors allocated
-int displaySectorsAllocated(unsigned int *FAT, int start)
+void display_cluster_chain(int *FAT, int start)
 {
-	int i = 1;
-	//printf("%d, ", start);
-	while(FAT[start] != 268435455)
+	printf("%d, ", start);
+	while(FAT[start] != 0x0fffffff)
 	{
 		start = FAT[start];
-		//printf("%d, ", start);
-		i++;
+		printf("%d, ", start);
 	}
-	return i;
 }
 
-void displayDIREntries(char *tab, struct DIRECTORY_ENTRY *temp, unsigned int *FAT)
+void print_directory(struct DIRECTORY *dir, char *tab) //tab is only used for printing purpose.
 {
-	while(temp != NULL)
+	while(dir)
 	{
-		printf("%sFileName = %s\n", tab, temp->Name);
-		printf("%sFileSize = %ld Bytes\n", tab, temp->FileSize);
-		printf("%sStartCluster = %d\n", tab, temp->StartCluster);
-		printf("%sFileAttr = %x %s\n", tab, temp->Attr, (temp->Attr == 0x10 ? "(DIR)" : "(FILE)"));
-		if(temp->StartCluster != 0) printf("%sTotalSectors = %d\n", tab, displaySectorsAllocated(FAT, temp->StartCluster));
-
-		if(temp->dir != NULL)
+		printf("%sFileName = %s\n", tab, dir->Name);
+		printf("%sFileSize = %d Bytes\n", tab, dir->FileSize);
+		printf("%sStartCluster = %d\n", tab, dir->StartCluster);
+		printf("%sFileAttr = %x %s\n", tab, dir->Attr, (dir->Attr == 0x10 ? "(DIR)" : "(FILE)"));
+		if(dir->dir != NULL)
 		{
 			char tab2[100];
 			strcpy(tab2, tab);
 			strcat(tab2, "\t");
 			printf("%s!\n", tab2);
 			printf("%s!\n", tab2);
-			displayDIREntries(tab2, temp->dir, FAT);
+			print_directory(dir->dir, tab2);
 		}
 		printf("\n");
-		temp = temp->next;
+		dir = dir->next;
 	}
 }
 
-void displayFSInfo(struct FSInfo *fsinfo)
-{
-	printf("\n+++  FSInfo +++\n");
-	printf("Free Cluster Count = %d\n", fsinfo->Free_Count);
-	printf("First Available free cluster = %d\n", fsinfo->Nxt_Free);
-	printf("++++++++++++++\n");
-}
-
-void initializeFSInfo(int disk, struct FSInfo *fsinfo)
-{
-	unsigned char buffer[512];
-	lseek(disk, 512, SEEK_SET);
-	read(disk, buffer, 512);
-	fsinfo->Free_Count = turn_to_integer(buffer, 488, 4);
-	fsinfo->Nxt_Free = turn_to_integer(buffer, 492, 4);
-
-	displayFSInfo(fsinfo);
-
-}
-
-
-
-
-void storeDirEntryInBuffer(char *buffer, char *Name, unsigned short int Attr, unsigned int N)
+//create a directory record and copy into buffer to write back into memory
+void create_directory_record(char *buffer, char *Name, int Attr, int N/*cluster number*/)
 {
 	//Name
 	int nameLength = sizeof(Name)/sizeof(char);
@@ -341,179 +331,133 @@ void storeDirEntryInBuffer(char *buffer, char *Name, unsigned short int Attr, un
 	buffer[26] = N & 0xFF;
 	buffer[27] = (N >> 8) & 0xFF;
 
+	//FileSize
 	buffer[28] = 0;
 	buffer[29] = 0;
 	buffer[30] = 0;
 	buffer[31] = 0;
 }
 
-int findFreeCluster(int *FAT, int FATEntryCount)
+int get_free_cluster(int *FAT)
 {
 	//I'm skipping first 10 and Last 20 entries
-	for(int i = 10; i < (FATEntryCount - 20); i++)
+	int count = (bpb->FATSz32 * bpb->BytsPerSec) / FAT_RECORD_SIZE;
+	for(int i = 10; i < (count - 20); i++)
 		if(FAT[i] == 0)
 			return i;
 }
 
-
-
-
-void createDir(int disk, char *Name, struct BPB *bpb, unsigned int *FAT, int FATEntryCount, int curDirClusNum)
+void create_directory(char *Name, int *FAT, int curDirClusNum)
 {
 
 	//code should be optimized for every directory and accessed byte wise or sector wise
 	//and remove redundant buffers
-	char buffer_1[32], buffer_2[32], buffer_3[32];
+	char newDirEntry[DIR_RECORD_SIZE], _firstEntry[DIR_RECORD_SIZE], _secondEntry[DIR_RECORD_SIZE];
 
-	int freeCluster = findFreeCluster(FAT, FATEntryCount);
+	int freeCluster = get_free_cluster(FAT);
 
-
-	printf("Free Cluster = %d\n", freeCluster);
 	//entry in root dir
-	storeDirEntryInBuffer(buffer_1, Name, 0x10, freeCluster);
+	create_directory_record(newDirEntry, Name, 0x10, freeCluster);
 
-	printf("SEE THIS --> ");
-	display_series_of_characters(buffer_1, 11);
-	printf("\n");
-
-	//entries in the created dir
-	storeDirEntryInBuffer(buffer_2, ".", 0x10, freeCluster);
-	storeDirEntryInBuffer(buffer_3, "..", 0x10, curDirClusNum); //curDirClusNum is 0 for root directory
+	//entries to be created in the new directory
+	create_directory_record(_firstEntry, ".", 0x10, freeCluster);
+	create_directory_record(_secondEntry, "..", 0x10, curDirClusNum); //curDirClusNum is 0 for root directory
 
 
-	unsigned long int occupied = 268435455;
-	unsigned char buffer_fat_entry[4];
-	buffer_fat_entry[0] = (occupied) & 0xFF;
-	buffer_fat_entry[1] = (occupied >> 8) & 0xFF;
-	buffer_fat_entry[2] = (occupied >> 16) & 0xFF;
-	buffer_fat_entry[3] = (occupied >> 24) & 0xFF;
+	char fatEntry[4];
+	fatEntry[0] = (EOC) & 0xFF;
+	fatEntry[1] = (EOC >> 8) & 0xFF;
+	fatEntry[2] = (EOC >> 16) & 0xFF;
+	fatEntry[3] = (EOC >> 24) & 0xFF;
 
-
-
-	//make that freecluster entry in fat to occupied (both FAT's)
+	//Occupying the FAT Entry
+	//FAT1 fat entry
 	lseek(disk, (bpb->RsvdSecCnt * bpb->BytsPerSec) + (freeCluster * 4), SEEK_SET);
-	write(disk, buffer_fat_entry, 4);
+	write(disk, fatEntry, 4);
+	//FAT2 fat entry
 	lseek(disk, bpb->RsvdSecCnt * bpb->BytsPerSec + (bpb->FATSz32 * bpb->BytsPerSec) + (freeCluster * 4), SEEK_SET);
-	write(disk, buffer_fat_entry, 4);
+	write(disk, fatEntry, 4);
 
-	/*
-	unsigned char *buffer = malloc((bpb->FATSz32 * bpb->BytsPerSec) * sizeof(unsigned char));
-	read(disk, buffer, bpb->FATSz32 * bpb->BytsPerSec);
-	int NumberOfFATEntries = (bpb->FATSz32 * bpb->BytsPerSec) / 4;
-	
-	*/
+	//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-	//find a free entry in the curDir and copy the buffer_1
-
-
-
-
-
-
-
-	int startSector = getFirstSectorOfCluster(curDirClusNum, bpb);
+	//find a free entry in the curDir and copy the newDirEntry
+	int startSector = first_sector_of_cluster(curDirClusNum);
 	//Root directory entries are of 32 Bytes
 	//and their number of entries are limited to the size of cluster
-	//and size is based on the FAT entries
 
-	int DirEntriesInACluster = (bpb->SecPerClus * bpb->BytsPerSec) / 32;
-	unsigned char *buffer = malloc((bpb->SecPerClus * bpb->BytsPerSec) * sizeof(unsigned char));
+	int clusterSizeInBytes = bpb->SecPerClus * bpb->BytsPerSec;
+	int recordCount = clusterSizeInBytes / DIR_RECORD_SIZE;
+	char *buffer = malloc(clusterSizeInBytes * sizeof(char));
 
 	lseek(disk, startSector * bpb->BytsPerSec, SEEK_SET);
-	read(disk, buffer, (bpb->SecPerClus * bpb->BytsPerSec));
+	read(disk, buffer, clusterSizeInBytes);
 
-	//readingPoint is used to skip these records in a directory
-	// . --> points to the same directory
-	// .. --> points to the parent directory
-	unsigned int fre;
-	for(int i = 0; i < DirEntriesInACluster; i++)
+	int freeRecord;
+	for(int i = 0; i < recordCount; i++)
 	{
-		//printf("Chekc this out == >");
-		//display_series_of_characters(buffer + (32 * i), 11);
-		//printf("\n");
-		//End Of Records && Unused Record caused By Deletion
+		//End Of Records or Unused Records caused By Deletion
 		if(buffer[32 * i] == 0x0 || buffer[32 * i] == 0xE5)
 		{
-			fre = i;
+			freeRecord = i;
 			break;
 		}
 	}
 
-	printf("Free Entry = %d\n", fre);
-	for(int i = 0; i < 32; i++)
+	if((freeRecord + 1) == recordCount)
 	{
-		buffer[(32 * fre) + i] = buffer_1[i];
+		//go to the next cluster in cluster chain for creating the entry
 	}
-	
-	lseek(disk, startSector * bpb->BytsPerSec, SEEK_SET);
-	write(disk, buffer, (bpb->SecPerClus * bpb->BytsPerSec));
+	lseek(disk, (startSector * bpb->BytsPerSec) + (freeRecord * DIR_RECORD_SIZE), SEEK_SET);
+	write(disk, newDirEntry, DIR_RECORD_SIZE);
+	free(buffer);
 
+	//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-
-
-
-
-	//go that free cluster and copy 0 inside te whole cluster(not efficient)
-	//and place the entries buffer_2 and buffer_3
-	unsigned int X = getFirstSectorOfCluster(freeCluster, bpb);
-	lseek(disk, X * bpb->BytsPerSec, SEEK_SET);
-	//make all entries 0;
-	unsigned char *cluster_buffer = calloc(bpb->SecPerClus * bpb->BytsPerSec, sizeof(unsigned char));
+	//Go to that free cluster and copy 0x0 inside the whole cluster(not efficient)
+	//and place the entries _firstEntry and _secondEntry
+	buffer = calloc(clusterSizeInBytes, sizeof(char));
 	//copy first two entries
 	for(int i = 0; i < 32; i++)
 	{
-		cluster_buffer[i] = buffer_2[i];
-		cluster_buffer[32+i] = buffer_3[i];
+		buffer[i] = _firstEntry[i];
+		buffer[32 + i] = _secondEntry[i];
 	}
 
-	write(disk, cluster_buffer, bpb->SecPerClus * bpb->BytsPerSec);
-
-
+	startSector = first_sector_of_cluster(freeCluster);
+	lseek(disk, startSector * bpb->BytsPerSec, SEEK_SET);
+	write(disk, buffer, clusterSizeInBytes);
 	free(buffer);
-	free(cluster_buffer);
-	
 }
-
-
 
 int main()
 {
 
-	int disk = open("/dev/sdc1", O_RDWR);
+	disk = open("/dev/sdc1", O_RDWR);
 
-	//BIOS parametric Block
-	struct BPB bpb;
-	initializeBPB(disk, &bpb);
-
-	struct FSInfo fsinfo;
-	initializeFSInfo(disk, &fsinfo);
-
+	init_BPB();
+	print_BPB();
 
 	//Get FAT(file allocation table) into Memory
-	int NumberOfFATEntries = (bpb.FATSz32 * bpb.BytsPerSec) / 4;
-	unsigned int *FAT;
-	FAT = (unsigned int *)calloc(NumberOfFATEntries, sizeof(unsigned int));
-	initializeFAT32(disk, FAT, &bpb);
+	int numberOfFATEntries = (bpb->FATSz32 * bpb->BytsPerSec) / FAT_RECORD_SIZE;
+	int *FAT = calloc(numberOfFATEntries, sizeof(int));
+	init_FAT32(FAT);
+	//print_FAT32(FAT, numberOfFATEntries);
 
-	
-	/*printf("%d == %d\n",NumberOfFATEntries, 1988480);
-	for(int i = 0; i < NumberOfFATEntries; i++)
-	{
-		printf("FatEntry[ %d ] = %x \n", i, FAT[i]);
-	}
-	*/
 
-	struct DIRECTORY_ENTRY *DIR = readDirecory(0, bpb.RootClus, disk, &bpb);
+	struct DIRECTORY *DIR = read_directory(bpb->RootClus, 0, FAT);
+	//display files and directories
 	printf("==========  FILE SYSTEM ===========\n\n");
 	char tab[100] = "";
-	displayDIREntries(tab, DIR, FAT);
+	print_directory(DIR, tab);
 
-
-
-	//createDir(disk, "MACHO", &bpb, FAT, NumberOfFATEntries, bpb.RootClus);
+	//My constraints
+	//Names should be only of 8 characters long
+	//Names should be only in Capital Letters
+	//create_directory("LINUX", FAT, bpb->RootClus);
 
 	//DIR LIST TO BE CLEARED
 	free(FAT);
+	free(bpb);
 	close(disk);
 
 	return 0;
