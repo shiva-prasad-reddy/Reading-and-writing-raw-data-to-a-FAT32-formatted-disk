@@ -237,9 +237,12 @@ struct DIRECTORY* read_directory(int clusterNumber, int recordStartingPoint, int
 			temp->StartCluster = (little_endian_to_integer(buffer + (32 * i), 20, 2) * pow(2, 16)) + little_endian_to_integer(buffer + (32 * i), 26, 2);
 			temp->Attr = attr;
 
+			//to read directories in directories
 			if(attr == 0x10)
 				temp->dir = read_directory(temp->StartCluster, 2, FAT); //2 to skip . and .. dir entries
 			
+			//if the current directory has a chain of clusters
+			//to traverse the next cluster in chain
 			if(FAT[clusterNumber] != EOC)
 				last->next = read_directory(FAT[clusterNumber], recordStartingPoint, FAT);
 		}
@@ -347,23 +350,8 @@ int get_free_cluster(int *FAT)
 			return i;
 }
 
-void create_directory(char *Name, int *FAT, int curDirClusNum)
+void write_to_fat_tables(int freeCluster)
 {
-
-	//code should be optimized for every directory and accessed byte wise or sector wise
-	//and remove redundant buffers
-	char newDirEntry[DIR_RECORD_SIZE], _firstEntry[DIR_RECORD_SIZE], _secondEntry[DIR_RECORD_SIZE];
-
-	int freeCluster = get_free_cluster(FAT);
-
-	//entry in root dir
-	create_directory_record(newDirEntry, Name, 0x10, freeCluster);
-
-	//entries to be created in the new directory
-	create_directory_record(_firstEntry, ".", 0x10, freeCluster);
-	create_directory_record(_secondEntry, "..", 0x10, curDirClusNum); //curDirClusNum is 0 for root directory
-
-
 	char fatEntry[4];
 	fatEntry[0] = (EOC) & 0xFF;
 	fatEntry[1] = (EOC >> 8) & 0xFF;
@@ -377,9 +365,10 @@ void create_directory(char *Name, int *FAT, int curDirClusNum)
 	//FAT2 fat entry
 	lseek(disk, bpb->RsvdSecCnt * bpb->BytsPerSec + (bpb->FATSz32 * bpb->BytsPerSec) + (freeCluster * 4), SEEK_SET);
 	write(disk, fatEntry, 4);
+}
 
-	//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
+void write_to_cur_dir_cluster(char *newDirEntry, int curDirClusNum, int *FAT)
+{
 	//find a free entry in the curDir and copy the newDirEntry
 	int startSector = first_sector_of_cluster(curDirClusNum);
 	//Root directory entries are of 32 Bytes
@@ -406,16 +395,23 @@ void create_directory(char *Name, int *FAT, int curDirClusNum)
 	if((freeRecord + 1) == recordCount)
 	{
 		//go to the next cluster in cluster chain for creating the entry
+		//because cur dir is FULL
+		free(buffer);
+		return write_to_cur_dir_cluster(newDirEntry, FAT[curDirClusNum], FAT);
+
 	}
 	lseek(disk, (startSector * bpb->BytsPerSec) + (freeRecord * DIR_RECORD_SIZE), SEEK_SET);
 	write(disk, newDirEntry, DIR_RECORD_SIZE);
 	free(buffer);
+}
 
-	//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
+void write_to_new_dir_cluster(char *_firstEntry, char *_secondEntry, int freeCluster)
+{
 	//Go to that free cluster and copy 0x0 inside the whole cluster(not efficient)
 	//and place the entries _firstEntry and _secondEntry
-	buffer = calloc(clusterSizeInBytes, sizeof(char));
+
+	int clusterSizeInBytes = bpb->SecPerClus * bpb->BytsPerSec;
+	char *buffer = calloc(clusterSizeInBytes, sizeof(char));
 	//copy first two entries
 	for(int i = 0; i < 32; i++)
 	{
@@ -423,19 +419,43 @@ void create_directory(char *Name, int *FAT, int curDirClusNum)
 		buffer[32 + i] = _secondEntry[i];
 	}
 
-	startSector = first_sector_of_cluster(freeCluster);
+	int startSector = first_sector_of_cluster(freeCluster);
 	lseek(disk, startSector * bpb->BytsPerSec, SEEK_SET);
 	write(disk, buffer, clusterSizeInBytes);
 	free(buffer);
 }
 
+void create_directory(char *Name, int *FAT, int curDirClusNum)
+{
+
+	//code should be optimized for every directory and accessed byte wise or sector wise
+	//and remove redundant buffers
+	char newDirEntry[DIR_RECORD_SIZE], _firstEntry[DIR_RECORD_SIZE], _secondEntry[DIR_RECORD_SIZE];
+
+	int freeCluster = get_free_cluster(FAT);
+	//Update In Memory FAT
+	FAT[freeCluster] = EOC;
+
+	//entry in root dir
+	create_directory_record(newDirEntry, Name, 0x10, freeCluster);
+
+	//entries to be created in the new directory
+	create_directory_record(_firstEntry, ".", 0x10, freeCluster);
+	create_directory_record(_secondEntry, "..", 0x10, curDirClusNum); //curDirClusNum is 0 for root directory
+
+
+	write_to_fat_tables(freeCluster);
+	write_to_cur_dir_cluster(newDirEntry, curDirClusNum, FAT);
+	write_to_new_dir_cluster(_firstEntry, _secondEntry, freeCluster);
+	
+}
+
 int main()
 {
 
-	disk = open("/dev/sdc1", O_RDWR);
+	disk = open("/dev/sdb1", O_RDWR);
 
 	init_BPB();
-	print_BPB();
 
 	//Get FAT(file allocation table) into Memory
 	int numberOfFATEntries = (bpb->FATSz32 * bpb->BytsPerSec) / FAT_RECORD_SIZE;
@@ -444,16 +464,54 @@ int main()
 	//print_FAT32(FAT, numberOfFATEntries);
 
 
-	struct DIRECTORY *DIR = read_directory(bpb->RootClus, 0, FAT);
-	//display files and directories
-	printf("==========  FILE SYSTEM ===========\n\n");
+	struct DIRECTORY *DIR = NULL;
 	char tab[100] = "";
-	print_directory(DIR, tab);
+	char name[8];
 
-	//My constraints
-	//Names should be only of 8 characters long
-	//Names should be only in Capital Letters
-	//create_directory("LINUX", FAT, bpb->RootClus);
+
+	int choice, clus;
+	do
+	{
+		printf("===  MENU ===\n");
+		printf("1. BPB Info\n");
+		printf("2. Display Directories\n");
+		printf("3. Create Directory\n");
+		printf("4. Exit\n");
+		printf("CHOICE ==> ");
+		scanf("%d", &choice);
+		switch(choice)
+		{
+			case 1:
+				print_BPB();
+				break;
+			case 2:
+				DIR = read_directory(bpb->RootClus, 0, FAT);
+				//display files and directories
+				printf("\n==========  FILE SYSTEM ===========\n\n");
+				print_directory(DIR, tab);
+				//free dir after printing
+				break;
+			case 3:
+				printf("Enter Directory Name ==> ");
+				scanf("%s", name);
+				//fgets(name, 8, stdin);
+				printf("Enter Cluster Number ==> ");
+				scanf("%d", &clus);
+				//My constraints
+				//Names should be only of 8 characters long
+				//Names should be only in Capital Letters
+				create_directory(name, FAT, clus);
+				printf("---- DIR CREATED ---\n");
+				break;
+			case 4:
+				break;
+			default:
+				printf("Invalid Choice.\n");
+		}
+
+	} while(choice != 4);
+
+
 
 	//DIR LIST TO BE CLEARED
 	free(FAT);
