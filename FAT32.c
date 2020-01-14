@@ -450,6 +450,20 @@ void create_directory(char *Name, int *FAT, int curDirClusNum)
 	
 }
 
+void free_dir_entries(struct DIRECTORY *dir)
+{
+	struct DIRECTORY *temp;
+	while(dir)
+	{
+		if(dir->dir)
+			free_dir_entries(dir->dir);
+
+		temp = dir;
+		dir = dir->next;
+		free(temp);
+	}
+}
+
 int main()
 {
 
@@ -490,6 +504,9 @@ int main()
 				printf("\n==========  FILE SYSTEM ===========\n\n");
 				print_directory(DIR, tab);
 				//free dir after printing
+				//All entries should be cleared
+				free_dir_entries(DIR);
+				DIR = NULL;
 				break;
 			case 3:
 				printf("Enter Directory Name ==> ");
