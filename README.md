@@ -3,6 +3,7 @@ A simple C program to read FAT tables and output the directory strcuture to the 
 > Followed Microsoft FAT32 specification.
 
 #Output
+```sh
 ===  MENU ===
 1. BPB Info
 2. Display Directories
@@ -216,3 +217,4 @@ FileAttr = 10 (DIR)
 3. Create Directory
 4. Exit
 CHOICE ==> 4
+```
