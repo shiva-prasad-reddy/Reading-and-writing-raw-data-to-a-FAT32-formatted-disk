@@ -1,5 +1,5 @@
 # Reading and writing raw data to a FAT32 formatted disk
-A simple C program for reading Boot sector and FAT32 tables & viewing the directory structure and writing new directory enties to FAT tables.
+A simple C program for reading Boot sector and FAT32 tables & viewing the directory structure and writing new directory enties in to FAT tables.
 > Followed Microsoft FAT32 specification.
 
 # Output
